@@ -499,14 +499,44 @@ def transcribe_command(audio_source: str, output_format: str, output: Optional[s
         click.echo(f"✅ Transcription complete! Output saved to: {output_path}")
         
         # Display summary information
-        # Handle Deepgram SDK response object
-        if hasattr(transcript_response, 'results'):
-            results_data = transcript_response.results
-        else:
-            results_data = transcript_response
+        # Use the same conversion logic as in generate_srt
+        try:
+            if hasattr(transcript_response, 'to_dict'):
+                results_data = transcript_response.to_dict()
+            elif hasattr(transcript_response, 'results'):
+                results = transcript_response.results
+                if hasattr(results, 'to_dict'):
+                    results_data = {'results': results.to_dict()}
+                else:
+                    # Manual conversion for object attributes
+                    channels_data = []
+                    for channel in results.channels:
+                        alternatives_data = []
+                        for alt in channel.alternatives:
+                            alt_dict = {
+                                'transcript': alt.transcript if hasattr(alt, 'transcript') else '',
+                                'confidence': alt.confidence if hasattr(alt, 'confidence') else 0,
+                                'words': []
+                            }
+                            if hasattr(alt, 'words'):
+                                for word in alt.words:
+                                    alt_dict['words'].append({
+                                        'word': word.word,
+                                        'start': word.start,
+                                        'end': word.end,
+                                        'confidence': word.confidence if hasattr(word, 'confidence') else 0
+                                    })
+                            alternatives_data.append(alt_dict)
+                        channels_data.append({'alternatives': alternatives_data})
+                    results_data = {'results': {'channels': channels_data}}
+            else:
+                results_data = transcript_response
+        except:
+            # Skip summary display if conversion fails
+            return
             
-        if results_data.get('channels'):
-            channel = results_data['channels'][0]
+        if results_data.get('results', {}).get('channels'):
+            channel = results_data['results']['channels'][0]
             if 'alternatives' in channel and channel['alternatives']:
                 alternative = channel['alternatives'][0]
                 
