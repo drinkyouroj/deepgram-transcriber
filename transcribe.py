@@ -116,14 +116,20 @@ class DeepgramTranscriber:
         else:  # vtt
             return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
     
-    def generate_srt(self, transcript_data: Dict[str, Any]) -> str:
+    def generate_srt(self, transcript_response) -> str:
         """Generate SRT format subtitle content."""
         srt_content = []
         
-        if not transcript_data.get('results', {}).get('channels', []):
+        # Handle Deepgram SDK response object
+        if hasattr(transcript_response, 'results'):
+            transcript_data = transcript_response.results
+        else:
+            transcript_data = transcript_response
+        
+        if not transcript_data.get('channels', []):
             raise ValueError("No transcription results found")
         
-        alternatives = transcript_data['results']['channels'][0]['alternatives'][0]
+        alternatives = transcript_data['channels'][0]['alternatives'][0]
         words = alternatives.get('words', [])
         
         if not words:
@@ -171,14 +177,20 @@ class DeepgramTranscriber:
         
         return '\n'.join(srt_content)
     
-    def generate_vtt(self, transcript_data: Dict[str, Any]) -> str:
+    def generate_vtt(self, transcript_response) -> str:
         """Generate VTT format subtitle content."""
         vtt_content = ["WEBVTT", ""]
         
-        if not transcript_data.get('results', {}).get('channels', []):
+        # Handle Deepgram SDK response object
+        if hasattr(transcript_response, 'results'):
+            transcript_data = transcript_response.results
+        else:
+            transcript_data = transcript_response
+        
+        if not transcript_data.get('channels', []):
             raise ValueError("No transcription results found")
         
-        alternatives = transcript_data['results']['channels'][0]['alternatives'][0]
+        alternatives = transcript_data['channels'][0]['alternatives'][0]
         words = alternatives.get('words', [])
         
         if not words:
@@ -457,8 +469,14 @@ def transcribe_command(audio_source: str, output_format: str, output: Optional[s
         click.echo(f"✅ Transcription complete! Output saved to: {output_path}")
         
         # Display summary information
-        if transcript_response.get('results', {}).get('channels'):
-            channel = transcript_response['results']['channels'][0]
+        # Handle Deepgram SDK response object
+        if hasattr(transcript_response, 'results'):
+            results_data = transcript_response.results
+        else:
+            results_data = transcript_response
+            
+        if results_data.get('channels'):
+            channel = results_data['channels'][0]
             if 'alternatives' in channel and channel['alternatives']:
                 alternative = channel['alternatives'][0]
                 
