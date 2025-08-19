@@ -120,17 +120,47 @@ class DeepgramTranscriber:
         """Generate SRT format subtitle content."""
         srt_content = []
         
-        # Handle Deepgram SDK response object
-        if hasattr(transcript_response, 'results'):
-            transcript_data = transcript_response.results
-        else:
-            transcript_data = transcript_response
-        
-        if not transcript_data.get('channels', []):
-            raise ValueError("No transcription results found")
-        
-        alternatives = transcript_data['channels'][0]['alternatives'][0]
-        words = alternatives.get('words', [])
+        # Convert response to dict for consistent handling
+        try:
+            if hasattr(transcript_response, 'to_dict'):
+                transcript_data = transcript_response.to_dict()
+            elif hasattr(transcript_response, 'results'):
+                # Handle nested object structure
+                results = transcript_response.results
+                if hasattr(results, 'to_dict'):
+                    transcript_data = {'results': results.to_dict()}
+                else:
+                    # Manual conversion for object attributes
+                    channels_data = []
+                    for channel in results.channels:
+                        alternatives_data = []
+                        for alt in channel.alternatives:
+                            alt_dict = {
+                                'transcript': alt.transcript if hasattr(alt, 'transcript') else '',
+                                'confidence': alt.confidence if hasattr(alt, 'confidence') else 0,
+                                'words': []
+                            }
+                            if hasattr(alt, 'words'):
+                                for word in alt.words:
+                                    alt_dict['words'].append({
+                                        'word': word.word,
+                                        'start': word.start,
+                                        'end': word.end,
+                                        'confidence': word.confidence if hasattr(word, 'confidence') else 0
+                                    })
+                            alternatives_data.append(alt_dict)
+                        channels_data.append({'alternatives': alternatives_data})
+                    transcript_data = {'results': {'channels': channels_data}}
+            else:
+                transcript_data = transcript_response
+            
+            if not transcript_data.get('results', {}).get('channels', []):
+                raise ValueError("No transcription results found")
+            
+            alternatives = transcript_data['results']['channels'][0]['alternatives'][0]
+            words = alternatives.get('words', [])
+        except Exception as e:
+            raise ValueError(f"Error processing transcript response: {str(e)}")
         
         if not words:
             # Fallback to paragraphs if words are not available
