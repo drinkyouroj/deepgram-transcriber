@@ -26,10 +26,9 @@ class DeepgramTranscriber:
     """Handles Deepgram API transcription and subtitle generation."""
     
     def __init__(self, api_key: str, timeout_seconds: int = 300):
-        # Configure client with configurable timeout for large files
-        self.client = DeepgramClient(api_key, config={
-            'timeout': httpx.Timeout(timeout_seconds, connect=60.0)
-        })
+        # Initialize client with standard constructor
+        self.client = DeepgramClient(api_key)
+        self.timeout_seconds = timeout_seconds
         self.supported_formats = {
             'mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus', 'webm', 'mp4', 
             'mov', 'avi', 'mkv', 'wmv', '3gp', 'amr', 'aiff', 'au', 'caf'
