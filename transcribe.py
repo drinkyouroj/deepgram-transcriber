@@ -61,11 +61,10 @@ class DeepgramTranscriber:
     def extract_youtube_audio_url(self, youtube_url: str) -> tuple[str, str]:
         """Extract direct audio stream URL from YouTube using yt-dlp."""
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'quiet': True,
             'no_warnings': True,
-            'extractaudio': True,
-            'audioformat': 'mp3',
+            'extractaudio': False,  # Don't extract, just get URL
             'outtmpl': '%(title)s.%(ext)s',
         }
         
@@ -78,21 +77,39 @@ class DeepgramTranscriber:
                 audio_url = None
                 title = info.get('title', 'YouTube Video')
                 
-                # Find the best audio-only format
-                for fmt in formats:
-                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                        audio_url = fmt.get('url')
+                # Prefer audio-only formats that Deepgram supports well
+                preferred_codecs = ['mp4a', 'opus', 'vorbis', 'aac']
+                
+                # First try: audio-only formats with preferred codecs
+                for codec in preferred_codecs:
+                    for fmt in formats:
+                        if (fmt.get('acodec', '').startswith(codec) and 
+                            fmt.get('vcodec') == 'none' and 
+                            fmt.get('url')):
+                            audio_url = fmt.get('url')
+                            break
+                    if audio_url:
                         break
                 
-                # Fallback to any format with audio
+                # Second try: any audio-only format
                 if not audio_url:
                     for fmt in formats:
-                        if fmt.get('acodec') != 'none':
+                        if (fmt.get('acodec') != 'none' and 
+                            fmt.get('vcodec') == 'none' and 
+                            fmt.get('url')):
+                            audio_url = fmt.get('url')
+                            break
+                
+                # Third try: any format with audio
+                if not audio_url:
+                    for fmt in formats:
+                        if (fmt.get('acodec') != 'none' and 
+                            fmt.get('url')):
                             audio_url = fmt.get('url')
                             break
                 
                 if not audio_url:
-                    raise ValueError("No audio stream found in YouTube video")
+                    raise ValueError("No compatible audio stream found in YouTube video")
                 
                 return audio_url, title
                 
