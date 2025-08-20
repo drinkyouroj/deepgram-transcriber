@@ -6,11 +6,13 @@ A comprehensive Python CLI tool that transcribes audio files and URLs to SRT/VTT
 
 - **Multiple Input Sources**: Local audio files, URLs, or YouTube videos
 - **YouTube Support**: Direct transcription from YouTube URLs using yt-dlp
+- **Audio Preservation**: Keep downloaded YouTube audio files with `--keep-audio` option
 - **Format Support**: All Deepgram-supported formats (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS, WebM, MP4, MOV, AVI, MKV, WMV, 3GP, AMR, AIFF, AU, CAF)
 - **Output Formats**: SRT and VTT subtitle files
 - **Full Deepgram API Integration**: Access to all advanced features
 - **Progress Tracking**: Visual progress indicator for long transcriptions
 - **Smart File Naming**: Automatic output naming based on input file or video title
+- **Cross-platform Compatibility**: Sanitized filenames work on Windows, macOS, and Linux
 
 ### Advanced Deepgram Features
 
@@ -67,14 +69,18 @@ python transcribe.py audio.mp3 -o my_subtitles.srt
 # YouTube video with speaker diarization
 python transcribe.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --diarize --format vtt
 
-# Full feature YouTube transcription
+# Keep downloaded YouTube audio file
+python transcribe.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --keep-audio
+
+# Full feature YouTube transcription with audio preservation
 python transcribe.py "https://youtu.be/dQw4w9WgXcQ" \
   --diarize \
   --summarize \
   --detect-topics \
   --detect-entities \
   --punctuate \
-  --smart-format
+  --smart-format \
+  --keep-audio
 
 # Speaker diarization with VTT output
 python transcribe.py interview.mp3 --diarize --format vtt
@@ -110,6 +116,7 @@ python transcribe.py "https://youtu.be/dQw4w9WgXcQ" \
 - `--output, -o`: Custom output file path
 - `--language, -l`: Language code (e.g., `en`, `es`, `fr`)
 - `--model, -m`: Deepgram model (`nova-2`, `enhanced`, `base`)
+- `--keep-audio`: Keep downloaded YouTube audio files instead of deleting them
 
 ### Content Enhancement
 - `--diarize/--no-diarize`: Enable speaker diarization
@@ -158,6 +165,15 @@ The script generates:
 - **Progress feedback** during transcription
 - **Confidence scores** and statistics
 - **Summaries and topics** (when requested)
+- **Downloaded audio files** (when using `--keep-audio` with YouTube URLs)
+
+## YouTube Audio Preservation
+
+When using the `--keep-audio` flag with YouTube URLs:
+- Audio files are saved to the current directory
+- Files are named based on the video title (sanitized for cross-platform compatibility)
+- Supported formats: M4A (default), MP4, WebM
+- Files are automatically added to `.gitignore` to prevent accidental commits
 
 ## Error Handling
 
@@ -167,6 +183,8 @@ The tool includes comprehensive error handling for:
 - Network connectivity issues
 - Malformed audio files
 - API rate limits
+- YouTube URL extraction failures
+- Filename sanitization for special characters
 
 ## Environment Variables
 
