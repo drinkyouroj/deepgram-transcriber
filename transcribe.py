@@ -60,60 +60,48 @@ class DeepgramTranscriber:
     
     def extract_youtube_audio_url(self, youtube_url: str) -> tuple[str, str]:
         """Extract direct audio stream URL from YouTube using yt-dlp."""
+        import tempfile
+        import os
+        
+        # Create a temporary directory for the download
+        temp_dir = tempfile.mkdtemp()
+        
         ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio',
             'quiet': True,
             'no_warnings': True,
-            'extractaudio': False,  # Don't extract, just get URL
-            'outtmpl': '%(title)s.%(ext)s',
+            'extractaudio': True,
+            'audioformat': 'm4a',
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'm4a',
+                'preferredquality': '192',
+            }],
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
-                info = ydl.extract_info(youtube_url, download=False)
-                
-                # Get the best audio format
-                formats = info.get('formats', [])
-                audio_url = None
+                # Download the audio
+                info = ydl.extract_info(youtube_url, download=True)
                 title = info.get('title', 'YouTube Video')
                 
-                # Prefer audio-only formats that Deepgram supports well
-                preferred_codecs = ['mp4a', 'opus', 'vorbis', 'aac']
-                
-                # First try: audio-only formats with preferred codecs
-                for codec in preferred_codecs:
-                    for fmt in formats:
-                        if (fmt.get('acodec', '').startswith(codec) and 
-                            fmt.get('vcodec') == 'none' and 
-                            fmt.get('url')):
-                            audio_url = fmt.get('url')
-                            break
-                    if audio_url:
+                # Find the downloaded file
+                downloaded_file = None
+                for file in os.listdir(temp_dir):
+                    if file.endswith(('.m4a', '.mp4', '.webm', '.opus')):
+                        downloaded_file = os.path.join(temp_dir, file)
                         break
                 
-                # Second try: any audio-only format
-                if not audio_url:
-                    for fmt in formats:
-                        if (fmt.get('acodec') != 'none' and 
-                            fmt.get('vcodec') == 'none' and 
-                            fmt.get('url')):
-                            audio_url = fmt.get('url')
-                            break
+                if not downloaded_file:
+                    raise ValueError("No audio file was downloaded")
                 
-                # Third try: any format with audio
-                if not audio_url:
-                    for fmt in formats:
-                        if (fmt.get('acodec') != 'none' and 
-                            fmt.get('url')):
-                            audio_url = fmt.get('url')
-                            break
-                
-                if not audio_url:
-                    raise ValueError("No compatible audio stream found in YouTube video")
-                
-                return audio_url, title
+                return downloaded_file, title
                 
             except Exception as e:
+                # Clean up temp directory on error
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 raise ValueError(f"Failed to extract YouTube audio: {str(e)}")
     
     def validate_audio_file(self, file_path: str) -> bool:
@@ -131,63 +119,97 @@ class DeepgramTranscriber:
         
         return True
     
-    def transcribe_audio(self, audio_source: str, options: PrerecordedOptions, max_retries: int = 3) -> Dict[str, Any]:
-        """Transcribe audio using Deepgram API with retry logic."""
-        for attempt in range(max_retries):
-            try:
-                if self.is_youtube_url(audio_source):
-                    # Handle YouTube URL - extract audio stream
-                    click.echo("🎥 Extracting audio from YouTube video...")
-                    audio_url, video_title = self.extract_youtube_audio_url(audio_source)
-                    click.echo(f"📹 Video: {video_title}")
-                    click.echo(f"🎵 Using audio stream: {audio_url[:100]}...")
-                    
-                    response = self.client.listen.prerecorded.v("1").transcribe_url(
-                        {"url": audio_url}, options
-                    )
-                elif self.is_url(audio_source):
-                    # Handle regular URL source
+    def transcribe_audio(self, audio_source: str, output_format: str = 'srt', 
+                        enable_diarization: bool = False, text_replacements: dict = None) -> str:
+        """Transcribe audio from file or URL using Deepgram API."""
+        
+        temp_file_to_cleanup = None
+        
+        try:
+            # Handle YouTube URLs
+            if self.is_youtube_url(audio_source):
+                click.echo("🎥 Extracting audio from YouTube video...")
+                audio_file_path, video_title = self.extract_youtube_audio_url(audio_source)
+                click.echo(f"📹 Video: {video_title}")
+                click.echo(f"🎵 Downloaded audio file: {Path(audio_file_path).name}")
+                audio_source = audio_file_path
+                temp_file_to_cleanup = audio_file_path
+                output_filename = self.sanitize_filename(video_title)
+            else:
+                # For local files, use the filename without extension
+                output_filename = Path(audio_source).stem if not self.is_url(audio_source) else "transcription"
+            
+            # Validate audio source
+            if not self.validate_audio_file(audio_source):
+                raise ValueError(f"Unsupported audio format: {audio_source}")
+            
+            # Prepare transcription options
+            options = PrerecordedOptions(
+                model="nova-2",
+                smart_format=True,
+                punctuate=True,
+                diarize=enable_diarization,
+                language="en-US"
+            )
+            
+            # Create progress bar
+            with tqdm(total=100, desc="Transcribing", unit="%") as pbar:
+                pbar.update(10)
+                
+                # Transcribe audio
+                if self.is_url(audio_source) and not temp_file_to_cleanup:
                     response = self.client.listen.prerecorded.v("1").transcribe_url(
                         {"url": audio_source}, options
                     )
                 else:
-                    # Handle local file with chunked reading for large files
-                    file_size = os.path.getsize(audio_source)
-                    
-                    # For files larger than 100MB, read in chunks to avoid memory issues
-                    if file_size > 100 * 1024 * 1024:  # 100MB
-                        click.echo(f"Large file detected ({file_size / (1024*1024):.1f}MB). Processing...")
-                    
-                    with open(audio_source, "rb") as file:
-                        buffer_data = file.read()
-                    
-                    payload: FileSource = {
-                        "buffer": buffer_data,
-                    }
-                    
-                    response = self.client.listen.prerecorded.v("1").transcribe_file(
-                        payload, options
-                    )
+                    with open(audio_source, "rb") as audio_file:
+                        buffer_data = audio_file.read()
+                        response = self.client.listen.prerecorded.v("1").transcribe_file(
+                            {"buffer": buffer_data}, options
+                        )
                 
-                return response
-            
-            except Exception as e:
-                error_msg = str(e).lower()
+                pbar.update(90)
                 
-                # Check if it's a timeout or network issue that we can retry
-                if any(term in error_msg for term in ['timeout', 'connection', 'network', 'write operation timed out']):
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 10  # Exponential backoff: 10s, 20s, 30s
-                        click.echo(f"⚠️  Timeout on attempt {attempt + 1}. Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        raise Exception(f"Transcription failed after {max_retries} attempts due to timeout. Try with a smaller file or check your internet connection.")
+                # Extract transcript
+                transcript = response["results"]["channels"][0]["alternatives"][0]["transcript"]
+                if not transcript.strip():
+                    raise ValueError("No speech detected in the audio")
+                
+                # Apply text replacements if provided
+                if text_replacements:
+                    for old_text, new_text in text_replacements.items():
+                        transcript = transcript.replace(old_text, new_text)
+                
+                # Generate output based on format
+                if output_format.lower() == 'srt':
+                    output_content = self.generate_srt(response, enable_diarization)
+                    output_file = f"{output_filename}.srt"
+                elif output_format.lower() == 'vtt':
+                    output_content = self.generate_vtt(response, enable_diarization)
+                    output_file = f"{output_filename}.vtt"
                 else:
-                    # Non-retryable error
-                    raise Exception(f"Transcription failed: {str(e)}")
+                    raise ValueError(f"Unsupported output format: {output_format}")
+                
+                # Write output file
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(output_content)
+                
+                pbar.update(100)
+                
+                return output_file
+                
+        except Exception as e:
+            raise ValueError(f"Transcription failed: {str(e)}")
         
-        raise Exception(f"Transcription failed after {max_retries} attempts")
+        finally:
+            # Clean up temporary file if it was created
+            if temp_file_to_cleanup:
+                try:
+                    import shutil
+                    temp_dir = Path(temp_file_to_cleanup).parent
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass  # Ignore cleanup errors
     
     def format_timestamp(self, seconds: float, format_type: str) -> str:
         """Format timestamp for SRT or VTT format."""
