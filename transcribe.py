@@ -605,118 +605,34 @@ def transcribe_command(audio_source, **kwargs):
         with tqdm(total=100, desc="Transcribing", unit="%") as pbar:
             pbar.update(10)  # Initial progress
             
-            transcript_response = transcriber.transcribe_audio(audio_source, options, max_retries)
-            pbar.update(70)  # Transcription complete
+            # Prepare text replacements
+            text_replacements = {}
+            if kwargs.get('replace'):
+                for replacement in kwargs['replace']:
+                    if ':' in replacement:
+                        old_text, new_text = replacement.split(':', 1)
+                        text_replacements[old_text] = new_text
             
-            # Generate subtitle content
-            click.echo(f"Generating {output_format.upper()} format...")
-            if output_format == 'srt':
-                subtitle_content = transcriber.generate_srt(transcript_response)
-            else:
-                subtitle_content = transcriber.generate_vtt(transcript_response)
-            
-            pbar.update(20)  # Format generation complete
+            # Call transcribe_audio with correct parameters
+            output_file = transcriber.transcribe_audio(
+                audio_source,
+                output_format=kwargs.get('format', 'srt'),
+                enable_diarization=kwargs.get('diarize', False),
+                text_replacements=text_replacements if text_replacements else None,
+                keep_audio=kwargs.get('keep_audio', False)
+            )
+            pbar.update(10)  # Complete
         
-        # Determine output file path
-        if output:
-            output_path = Path(output)
-        else:
-            if transcriber.is_youtube_url(audio_source):
-                # For YouTube URLs, extract video title for filename
-                try:
-                    _, video_title = transcriber.extract_youtube_audio_url(audio_source)
-                    # Clean filename - remove invalid characters
-                    base_name = re.sub(r'[<>:"/\\|?*]', '_', video_title)
-                    base_name = base_name[:100]  # Limit length
-                except:
-                    base_name = "youtube_transcription"
-            elif transcriber.is_url(audio_source):
-                # Extract filename from URL or use default
-                url_path = urlparse(audio_source).path
-                if url_path:
-                    base_name = Path(url_path).stem or "transcription"
-                else:
-                    base_name = "transcription"
-            else:
-                base_name = Path(audio_source).stem
-            
-            output_path = Path(f"{base_name}.{output_format}")
+        # Success message
+        click.echo(f"✅ Transcription completed successfully!")
+        click.echo(f"📄 Output file: {output_file}")
         
-        # Write subtitle file
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(subtitle_content)
-        
-        click.echo(f"✅ Transcription complete! Output saved to: {output_path}")
-        
-        # Display summary information
-        # Use the same conversion logic as in generate_srt
-        try:
-            if hasattr(transcript_response, 'to_dict'):
-                results_data = transcript_response.to_dict()
-            elif hasattr(transcript_response, 'results'):
-                results = transcript_response.results
-                if hasattr(results, 'to_dict'):
-                    results_data = {'results': results.to_dict()}
-                else:
-                    # Manual conversion for object attributes
-                    channels_data = []
-                    for channel in results.channels:
-                        alternatives_data = []
-                        for alt in channel.alternatives:
-                            alt_dict = {
-                                'transcript': alt.transcript if hasattr(alt, 'transcript') else '',
-                                'confidence': alt.confidence if hasattr(alt, 'confidence') else 0,
-                                'words': []
-                            }
-                            if hasattr(alt, 'words'):
-                                for word in alt.words:
-                                    alt_dict['words'].append({
-                                        'word': word.word,
-                                        'start': word.start,
-                                        'end': word.end,
-                                        'confidence': word.confidence if hasattr(word, 'confidence') else 0
-                                    })
-                            alternatives_data.append(alt_dict)
-                        channels_data.append({'alternatives': alternatives_data})
-                    results_data = {'results': {'channels': channels_data}}
-            else:
-                results_data = transcript_response
-        except:
-            # Skip summary display if conversion fails
-            return
-            
-        if results_data.get('results', {}).get('channels'):
-            channel = results_data['results']['channels'][0]
-            if 'alternatives' in channel and channel['alternatives']:
-                alternative = channel['alternatives'][0]
-                
-                # Show confidence if available
-                if 'confidence' in alternative:
-                    confidence = alternative['confidence']
-                    click.echo(f"📊 Confidence: {confidence:.2%}")
-                
-                # Show word count
-                if 'words' in alternative:
-                    word_count = len(alternative['words'])
-                    click.echo(f"📝 Words transcribed: {word_count}")
-                
-                # Show summary if requested
-                if kwargs.get('summarize') and 'summary' in alternative:
-                    click.echo(f"\n📋 Summary:")
-                    click.echo(alternative['summary'])
-                
-                # Show topics if requested
-                if kwargs.get('detect_topics') and 'topics' in alternative:
-                    topics = alternative['topics']
-                    if topics:
-                        click.echo(f"\n🏷️  Topics detected:")
-                        for topic in topics[:5]:  # Show top 5 topics
-                            click.echo(f"  • {topic.get('topic', 'Unknown')} (confidence: {topic.get('confidence', 0):.2%})")
+        return output_file
     
     except Exception as e:
-        click.echo(f"❌ Error: {str(e)}", err=True)
+        click.echo(f"❌ Error: {str(e)}")
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     transcribe_command()
