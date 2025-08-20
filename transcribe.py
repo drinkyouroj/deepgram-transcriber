@@ -250,7 +250,7 @@ class DeepgramTranscriber:
         else:  # vtt
             return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
     
-    def generate_srt(self, transcript_response) -> str:
+    def generate_srt(self, transcript_response, enable_diarization: bool = False) -> str:
         """Generate SRT format subtitle content."""
         srt_content = []
         
@@ -341,7 +341,7 @@ class DeepgramTranscriber:
         
         return '\n'.join(srt_content)
     
-    def generate_vtt(self, transcript_response) -> str:
+    def generate_vtt(self, transcript_response, enable_diarization: bool = False) -> str:
         """Generate VTT format subtitle content."""
         vtt_content = ["WEBVTT", ""]
         
