@@ -4,12 +4,13 @@ A comprehensive Python CLI tool that transcribes audio files and URLs to SRT/VTT
 
 ## Features
 
-- **Multiple Input Sources**: Local audio files or URLs
+- **Multiple Input Sources**: Local audio files, URLs, or YouTube videos
+- **YouTube Support**: Direct transcription from YouTube URLs using yt-dlp
 - **Format Support**: All Deepgram-supported formats (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS, WebM, MP4, MOV, AVI, MKV, WMV, 3GP, AMR, AIFF, AU, CAF)
 - **Output Formats**: SRT and VTT subtitle files
 - **Full Deepgram API Integration**: Access to all advanced features
 - **Progress Tracking**: Visual progress indicator for long transcriptions
-- **Smart File Naming**: Automatic output naming based on input file
+- **Smart File Naming**: Automatic output naming based on input file or video title
 
 ### Advanced Deepgram Features
 
@@ -47,6 +48,9 @@ A comprehensive Python CLI tool that transcribes audio files and URLs to SRT/VTT
 # Simple transcription to SRT
 python transcribe.py audio.mp3
 
+# Transcribe YouTube video
+python transcribe.py "https://youtube.com/watch?v=dQw4w9WgXcQ"
+
 # Transcribe to VTT format
 python transcribe.py audio.wav --format vtt
 
@@ -60,11 +64,11 @@ python transcribe.py audio.mp3 -o my_subtitles.srt
 ### Advanced Examples
 
 ```bash
-# Speaker diarization with VTT output
-python transcribe.py interview.mp3 --diarize --format vtt
+# YouTube video with speaker diarization
+python transcribe.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --diarize --format vtt
 
-# Full feature transcription
-python transcribe.py meeting.wav \
+# Full feature YouTube transcription
+python transcribe.py "https://youtu.be/dQw4w9WgXcQ" \
   --diarize \
   --summarize \
   --detect-topics \
@@ -72,8 +76,11 @@ python transcribe.py meeting.wav \
   --punctuate \
   --smart-format
 
-# Multi-language with specific model
-python transcribe.py spanish_audio.mp3 \
+# Speaker diarization with VTT output
+python transcribe.py interview.mp3 --diarize --format vtt
+
+# Multi-language YouTube video
+python transcribe.py "https://youtube.com/watch?v=spanish_video" \
   --language es \
   --model nova-2 \
   --punctuate
@@ -84,14 +91,14 @@ python transcribe.py sensitive_audio.wav \
   --redact ssn \
   --redact pci
 
-# Keyword boosting for technical content
-python transcribe.py tech_talk.mp3 \
+# Keyword boosting for technical YouTube content
+python transcribe.py "https://youtube.com/watch?v=tech_talk" \
   --keywords "API" \
   --keywords "machine learning" \
   --keywords "Python"
 
-# Search and replace terms
-python transcribe.py audio.mp3 \
+# Search and replace terms in YouTube transcription
+python transcribe.py "https://youtu.be/dQw4w9WgXcQ" \
   --replace "um:pause" \
   --replace "uh:pause"
 ```

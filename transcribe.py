@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Optional, Dict, Any
+import re
 
 import click
 import requests
@@ -18,6 +19,7 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 from deepgram import DeepgramClient, PrerecordedOptions, FileSource
 import httpx
+import yt_dlp
 
 # Load environment variables
 load_dotenv()
@@ -42,10 +44,65 @@ class DeepgramTranscriber:
         except:
             return False
     
+    def is_youtube_url(self, url: str) -> bool:
+        """Check if the URL is a YouTube URL."""
+        youtube_patterns = [
+            r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/v/[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/playlist\?list=[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/channel/[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/c/[\w-]+',
+            r'(?:https?://)?(?:www\.)?youtube\.com/@[\w-]+',
+        ]
+        return any(re.match(pattern, url, re.IGNORECASE) for pattern in youtube_patterns)
+    
+    def extract_youtube_audio_url(self, youtube_url: str) -> tuple[str, str]:
+        """Extract direct audio stream URL from YouTube using yt-dlp."""
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'outtmpl': '%(title)s.%(ext)s',
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(youtube_url, download=False)
+                
+                # Get the best audio format
+                formats = info.get('formats', [])
+                audio_url = None
+                title = info.get('title', 'YouTube Video')
+                
+                # Find the best audio-only format
+                for fmt in formats:
+                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                        audio_url = fmt.get('url')
+                        break
+                
+                # Fallback to any format with audio
+                if not audio_url:
+                    for fmt in formats:
+                        if fmt.get('acodec') != 'none':
+                            audio_url = fmt.get('url')
+                            break
+                
+                if not audio_url:
+                    raise ValueError("No audio stream found in YouTube video")
+                
+                return audio_url, title
+                
+            except Exception as e:
+                raise ValueError(f"Failed to extract YouTube audio: {str(e)}")
+    
     def validate_audio_file(self, file_path: str) -> bool:
         """Validate if the file format is supported by Deepgram."""
         if self.is_url(file_path):
-            return True  # Assume URLs are valid, let Deepgram handle validation
+            return True  # URLs (including YouTube) are valid, let Deepgram handle validation
         
         path = Path(file_path)
         if not path.exists():
@@ -61,8 +118,18 @@ class DeepgramTranscriber:
         """Transcribe audio using Deepgram API with retry logic."""
         for attempt in range(max_retries):
             try:
-                if self.is_url(audio_source):
-                    # Handle URL source
+                if self.is_youtube_url(audio_source):
+                    # Handle YouTube URL - extract audio stream
+                    click.echo("🎥 Extracting audio from YouTube video...")
+                    audio_url, video_title = self.extract_youtube_audio_url(audio_source)
+                    click.echo(f"📹 Video: {video_title}")
+                    click.echo(f"🎵 Using audio stream: {audio_url[:100]}...")
+                    
+                    response = self.client.listen.prerecorded.v("1").transcribe_url(
+                        {"url": audio_url}, options
+                    )
+                elif self.is_url(audio_source):
+                    # Handle regular URL source
                     response = self.client.listen.prerecorded.v("1").transcribe_url(
                         {"url": audio_source}, options
                     )
@@ -332,14 +399,20 @@ class DeepgramTranscriber:
               help='File chunk size in MB for large files (default: 100)')
 def transcribe_command(audio_source: str, output_format: str, output: Optional[str], **kwargs):
     """
-    Transcribe audio files or URLs to SRT/VTT subtitle formats using Deepgram API.
+    Transcribe audio files, URLs, or YouTube videos to SRT/VTT subtitle formats using Deepgram API.
     
-    AUDIO_SOURCE can be a local file path or a URL to an audio/video file.
+    AUDIO_SOURCE can be:
+    - Local file path (audio.mp3, video.mp4, etc.)
+    - Direct URL to audio/video file
+    - YouTube URL (https://youtube.com/watch?v=..., https://youtu.be/...)
     
     Examples:
     
     Basic transcription:
         python transcribe.py audio.mp3
+    
+    YouTube video transcription:
+        python transcribe.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --diarize
     
     With speaker diarization:
         python transcribe.py audio.mp3 --diarize --format vtt
@@ -347,8 +420,8 @@ def transcribe_command(audio_source: str, output_format: str, output: Optional[s
     From URL with custom options:
         python transcribe.py "https://example.com/audio.mp3" --language en --model nova-2
     
-    Full feature example:
-        python transcribe.py audio.wav --diarize --summarize --detect-topics --punctuate --smart-format
+    Full feature YouTube example:
+        python transcribe.py "https://youtu.be/dQw4w9WgXcQ" --diarize --summarize --detect-topics --punctuate --smart-format
     """
     
     # Get API key
@@ -480,7 +553,16 @@ def transcribe_command(audio_source: str, output_format: str, output: Optional[s
         if output:
             output_path = Path(output)
         else:
-            if transcriber.is_url(audio_source):
+            if transcriber.is_youtube_url(audio_source):
+                # For YouTube URLs, extract video title for filename
+                try:
+                    _, video_title = transcriber.extract_youtube_audio_url(audio_source)
+                    # Clean filename - remove invalid characters
+                    base_name = re.sub(r'[<>:"/\\|?*]', '_', video_title)
+                    base_name = base_name[:100]  # Limit length
+                except:
+                    base_name = "youtube_transcription"
+            elif transcriber.is_url(audio_source):
                 # Extract filename from URL or use default
                 url_path = urlparse(audio_source).path
                 if url_path:
