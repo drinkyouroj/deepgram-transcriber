@@ -58,13 +58,36 @@ class DeepgramTranscriber:
         ]
         return any(re.match(pattern, url, re.IGNORECASE) for pattern in youtube_patterns)
     
-    def extract_youtube_audio_url(self, youtube_url: str) -> tuple[str, str]:
+    def sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename for cross-platform compatibility."""
+        # Remove or replace invalid characters
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            filename = filename.replace(char, '_')
+        
+        # Remove leading/trailing spaces and dots
+        filename = filename.strip('. ')
+        
+        # Limit length
+        if len(filename) > 200:
+            filename = filename[:200]
+        
+        # Ensure it's not empty
+        if not filename:
+            filename = "youtube_audio"
+        
+        return filename
+    
+    def extract_youtube_audio_url(self, youtube_url: str, keep_audio: bool = False) -> tuple[str, str]:
         """Extract direct audio stream URL from YouTube using yt-dlp."""
         import tempfile
         import os
         
-        # Create a temporary directory for the download
-        temp_dir = tempfile.mkdtemp()
+        # Choose output directory based on keep_audio flag
+        if keep_audio:
+            output_dir = os.getcwd()  # Current directory
+        else:
+            output_dir = tempfile.mkdtemp()  # Temporary directory
         
         ydl_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio',
@@ -72,7 +95,7 @@ class DeepgramTranscriber:
             'no_warnings': True,
             'extractaudio': True,
             'audioformat': 'm4a',
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'm4a',
@@ -88,9 +111,9 @@ class DeepgramTranscriber:
                 
                 # Find the downloaded file
                 downloaded_file = None
-                for file in os.listdir(temp_dir):
+                for file in os.listdir(output_dir):
                     if file.endswith(('.m4a', '.mp4', '.webm', '.opus')):
-                        downloaded_file = os.path.join(temp_dir, file)
+                        downloaded_file = os.path.join(output_dir, file)
                         break
                 
                 if not downloaded_file:
@@ -99,9 +122,10 @@ class DeepgramTranscriber:
                 return downloaded_file, title
                 
             except Exception as e:
-                # Clean up temp directory on error
-                import shutil
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                # Clean up temp directory on error only if not keeping audio
+                if not keep_audio:
+                    import shutil
+                    shutil.rmtree(output_dir, ignore_errors=True)
                 raise ValueError(f"Failed to extract YouTube audio: {str(e)}")
     
     def validate_audio_file(self, file_path: str) -> bool:
@@ -120,7 +144,8 @@ class DeepgramTranscriber:
         return True
     
     def transcribe_audio(self, audio_source: str, output_format: str = 'srt', 
-                        enable_diarization: bool = False, text_replacements: dict = None) -> str:
+                        enable_diarization: bool = False, text_replacements: dict = None, 
+                        keep_audio: bool = False) -> str:
         """Transcribe audio from file or URL using Deepgram API."""
         
         temp_file_to_cleanup = None
@@ -129,11 +154,14 @@ class DeepgramTranscriber:
             # Handle YouTube URLs
             if self.is_youtube_url(audio_source):
                 click.echo("🎥 Extracting audio from YouTube video...")
-                audio_file_path, video_title = self.extract_youtube_audio_url(audio_source)
+                audio_file_path, video_title = self.extract_youtube_audio_url(audio_source, keep_audio)
                 click.echo(f"📹 Video: {video_title}")
                 click.echo(f"🎵 Downloaded audio file: {Path(audio_file_path).name}")
+                if keep_audio:
+                    click.echo(f"💾 Audio file saved to: {audio_file_path}")
                 audio_source = audio_file_path
-                temp_file_to_cleanup = audio_file_path
+                if not keep_audio:
+                    temp_file_to_cleanup = audio_file_path
                 output_filename = self.sanitize_filename(video_title)
             else:
                 # For local files, use the filename without extension
@@ -434,9 +462,10 @@ class DeepgramTranscriber:
               help='API timeout in seconds (default: 300)')
 @click.option('--retries', type=int, default=3,
               help='Number of retry attempts for failed requests (default: 3)')
-@click.option('--chunk-size', type=int, default=100,
-              help='File chunk size in MB for large files (default: 100)')
-def transcribe_command(audio_source: str, output_format: str, output: Optional[str], **kwargs):
+@click.option('--chunk-size', default=100, help='File chunk size in MB for large files (default: 100)')
+@click.option('--keep-audio', is_flag=True, help='Keep downloaded YouTube audio file instead of deleting it')
+@click.option('--help', is_flag=True, expose_value=False, is_eager=True, help='Show this message and exit.')
+def transcribe_command(audio_source, **kwargs):
     """
     Transcribe audio files, URLs, or YouTube videos to SRT/VTT subtitle formats using Deepgram API.
     
