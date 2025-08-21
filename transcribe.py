@@ -145,10 +145,14 @@ class DeepgramTranscriber:
     
     def transcribe_audio(self, audio_source: str, output_format: str = 'srt', 
                         enable_diarization: bool = False, text_replacements: dict = None, 
-                        keep_audio: bool = False) -> str:
+                        keep_audio: bool = False, options: PrerecordedOptions = None) -> str:
         """Transcribe audio from file or URL using Deepgram API."""
         
         temp_file_to_cleanup = None
+        
+        # Reset debug flag for diarization
+        if hasattr(self, '_diarization_debug_printed'):
+            delattr(self, '_diarization_debug_printed')
         
         try:
             # Handle YouTube URLs
@@ -171,14 +175,18 @@ class DeepgramTranscriber:
             if not self.validate_audio_file(audio_source):
                 raise ValueError(f"Unsupported audio format: {audio_source}")
             
-            # Prepare transcription options
-            options = PrerecordedOptions(
-                model="nova-2",
-                smart_format=True,
-                punctuate=True,
-                diarize=enable_diarization,
-                language="en-US"
-            )
+            # Use provided options or create default ones
+            if options is None:
+                options = PrerecordedOptions(
+                    model="nova-2",
+                    smart_format=True,
+                    punctuate=True,
+                    diarize=enable_diarization,
+                    language="en-US"
+                )
+            # Update diarization setting based on parameter
+            if hasattr(options, 'diarize'):
+                options.diarize = enable_diarization
             
             # Create progress bar
             with tqdm(total=100, desc="Transcribing", unit="%") as pbar:
@@ -251,7 +259,7 @@ class DeepgramTranscriber:
             return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
     
     def generate_srt(self, transcript_response, enable_diarization: bool = False) -> str:
-        """Generate SRT format subtitle content."""
+        """Generate SRT format subtitle content with optional speaker labels."""
         srt_content = []
         
         # Convert response to dict for consistent handling
@@ -293,6 +301,71 @@ class DeepgramTranscriber:
             
             alternatives = transcript_data['results']['channels'][0]['alternatives'][0]
             words = alternatives.get('words', [])
+            
+            # Get speaker information if diarization is enabled
+            speaker_map = {}
+            if enable_diarization:
+                # Try different possible speaker info locations in the response
+                speaker_info = None
+                
+                # Check for utterances in alternatives
+                if 'utterances' in alternatives:
+                    speaker_info = alternatives['utterances']
+                # Check for utterances at channel level
+                elif 'utterances' in transcript_data['results']['channels'][0]:
+                    speaker_info = transcript_data['results']['channels'][0]['utterances']
+                # Check for words with speaker info
+                elif words and any('speaker' in word for word in words if isinstance(word, dict)):
+                    # Create utterances from words with speaker info
+                    current_speaker = None
+                    current_start = None
+                    current_end = None
+                    speaker_info = []
+                    
+                    for word in words:
+                        if isinstance(word, dict) and 'speaker' in word:
+                            word_speaker = word['speaker']
+                            if current_speaker != word_speaker:
+                                # Save previous utterance
+                                if current_speaker is not None:
+                                    speaker_info.append({
+                                        'speaker': current_speaker,
+                                        'start': current_start,
+                                        'end': current_end
+                                    })
+                                # Start new utterance
+                                current_speaker = word_speaker
+                                current_start = word.get('start')
+                            current_end = word.get('end')
+                    
+                    # Add final utterance
+                    if current_speaker is not None:
+                        speaker_info.append({
+                            'speaker': current_speaker,
+                            'start': current_start,
+                            'end': current_end
+                        })
+                
+                # Build speaker map
+                if speaker_info:
+                    unique_speakers = set()
+                    for utterance in speaker_info:
+                        speaker_id = utterance.get('speaker', 0)
+                        start_time = utterance.get('start')
+                        end_time = utterance.get('end')
+                        # Map time ranges to speakers
+                        if start_time is not None and end_time is not None:
+                            speaker_map[(start_time, end_time)] = f"Speaker {speaker_id + 1}"
+                            unique_speakers.add(speaker_id)
+                    
+                    # Debug info (only print once for both SRT and VTT)
+                    if speaker_map and not hasattr(self, '_diarization_debug_printed'):
+                        print(f"🎙️  Detected {len(unique_speakers)} speakers with {len(speaker_map)} utterances")
+                        self._diarization_debug_printed = True
+                else:
+                    if enable_diarization and not hasattr(self, '_diarization_debug_printed'):
+                        print("⚠️  Diarization enabled but no speaker information found in response")
+                        self._diarization_debug_printed = True
         except Exception as e:
             raise ValueError(f"Error processing transcript response: {str(e)}")
         
@@ -330,9 +403,29 @@ class DeepgramTranscriber:
                     start_time = self.format_timestamp(chunk_start, 'srt')
                     end_time = self.format_timestamp(word['end'], 'srt')
                     
+                    # Add speaker label if diarization is enabled
+                    display_text = chunk_text
+                    if enable_diarization and speaker_map:
+                        # Find the speaker for this time range
+                        best_match_speaker = None
+                        best_overlap = 0
+                        
+                        for (speaker_start, speaker_end), speaker_label in speaker_map.items():
+                            # Calculate overlap between chunk and speaker segment
+                            overlap_start = max(chunk_start, speaker_start)
+                            overlap_end = min(word['end'], speaker_end)
+                            overlap_duration = max(0, overlap_end - overlap_start)
+                            
+                            if overlap_duration > best_overlap:
+                                best_overlap = overlap_duration
+                                best_match_speaker = speaker_label
+                        
+                        if best_match_speaker:
+                            display_text = f"[{best_match_speaker}] {chunk_text}"
+                    
                     srt_content.append(f"{subtitle_index}")
                     srt_content.append(f"{start_time} --> {end_time}")
-                    srt_content.append(chunk_text)
+                    srt_content.append(display_text)
                     srt_content.append("")
                     
                     subtitle_index += 1
@@ -342,7 +435,7 @@ class DeepgramTranscriber:
         return '\n'.join(srt_content)
     
     def generate_vtt(self, transcript_response, enable_diarization: bool = False) -> str:
-        """Generate VTT format subtitle content."""
+        """Generate VTT format subtitle content with optional speaker labels."""
         vtt_content = ["WEBVTT", ""]
         
         # Handle Deepgram SDK response object
@@ -356,6 +449,71 @@ class DeepgramTranscriber:
         
         alternatives = transcript_data['channels'][0]['alternatives'][0]
         words = alternatives.get('words', [])
+        
+        # Get speaker information if diarization is enabled
+        speaker_map = {}
+        if enable_diarization:
+            # Try different possible speaker info locations in the response
+            speaker_info = None
+            
+            # Check for utterances in alternatives
+            if 'utterances' in alternatives:
+                speaker_info = alternatives['utterances']
+            # Check for utterances at channel level
+            elif 'utterances' in transcript_data['channels'][0]:
+                speaker_info = transcript_data['channels'][0]['utterances']
+            # Check for words with speaker info
+            elif words and any('speaker' in word for word in words if isinstance(word, dict)):
+                # Create utterances from words with speaker info
+                current_speaker = None
+                current_start = None
+                current_end = None
+                speaker_info = []
+                
+                for word in words:
+                    if isinstance(word, dict) and 'speaker' in word:
+                        word_speaker = word['speaker']
+                        if current_speaker != word_speaker:
+                            # Save previous utterance
+                            if current_speaker is not None:
+                                speaker_info.append({
+                                    'speaker': current_speaker,
+                                    'start': current_start,
+                                    'end': current_end
+                                })
+                            # Start new utterance
+                            current_speaker = word_speaker
+                            current_start = word.get('start')
+                        current_end = word.get('end')
+                
+                # Add final utterance
+                if current_speaker is not None:
+                    speaker_info.append({
+                        'speaker': current_speaker,
+                        'start': current_start,
+                        'end': current_end
+                    })
+            
+            # Build speaker map
+            if speaker_info:
+                unique_speakers = set()
+                for utterance in speaker_info:
+                    speaker_id = utterance.get('speaker', 0)
+                    start_time = utterance.get('start')
+                    end_time = utterance.get('end')
+                    # Map time ranges to speakers
+                    if start_time is not None and end_time is not None:
+                        speaker_map[(start_time, end_time)] = f"Speaker {speaker_id + 1}"
+                        unique_speakers.add(speaker_id)
+                
+                # Debug info (only print once for both SRT and VTT)
+                if speaker_map and not hasattr(self, '_diarization_debug_printed'):
+                    print(f"🎙️  Detected {len(unique_speakers)} speakers with {len(speaker_map)} utterances")
+                    self._diarization_debug_printed = True
+            else:
+                if enable_diarization and not hasattr(self, '_diarization_debug_printed'):
+                    print("⚠️  Diarization enabled but no speaker information found in response")
+                    self._diarization_debug_printed = True
         
         if not words:
             # Fallback to paragraphs if words are not available
@@ -389,8 +547,28 @@ class DeepgramTranscriber:
                     start_time = self.format_timestamp(chunk_start, 'vtt')
                     end_time = self.format_timestamp(word['end'], 'vtt')
                     
+                    # Add speaker label if diarization is enabled
+                    display_text = chunk_text
+                    if enable_diarization and speaker_map:
+                        # Find the speaker for this time range
+                        best_match_speaker = None
+                        best_overlap = 0
+                        
+                        for (speaker_start, speaker_end), speaker_label in speaker_map.items():
+                            # Calculate overlap between chunk and speaker segment
+                            overlap_start = max(chunk_start, speaker_start)
+                            overlap_end = min(word['end'], speaker_end)
+                            overlap_duration = max(0, overlap_end - overlap_start)
+                            
+                            if overlap_duration > best_overlap:
+                                best_overlap = overlap_duration
+                                best_match_speaker = speaker_label
+                        
+                        if best_match_speaker:
+                            display_text = f"[{best_match_speaker}] {chunk_text}"
+                    
                     vtt_content.append(f"{start_time} --> {end_time}")
-                    vtt_content.append(chunk_text)
+                    vtt_content.append(display_text)
                     vtt_content.append("")
                     
                     current_chunk = []
@@ -619,7 +797,8 @@ def transcribe_command(audio_source, **kwargs):
                 output_format=kwargs.get('format', 'srt'),
                 enable_diarization=kwargs.get('diarize', False),
                 text_replacements=text_replacements if text_replacements else None,
-                keep_audio=kwargs.get('keep_audio', False)
+                keep_audio=kwargs.get('keep_audio', False),
+                options=options
             )
             pbar.update(10)  # Complete
         
